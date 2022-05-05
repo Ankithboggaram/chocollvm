@@ -115,17 +115,25 @@ class LLVMBackend(Backend):
             raise Exception("No builder is active")
         
         # Create allocation for variable
+        # {id} : {type} = {value}
 
+        var = self.visit(node.var)
+        allocation = self._create_alloca(var['name'], var['type'])
+        val = self.visit(node.value)
+        self.builder.store(val, allocation)
+        self.func_symtab[-1][var['name']] = allocation
+      
 
     def AssignStmt(self, node: AssignStmt):
+        
         if self.builder is None:
             raise Exception("No builder is active")
 
         val = self.visit(node.value)
-        # target = self._get_var_addr(node.targets)
+        targets = node.targets[::-1]
 
-        for target in node.targets:
-            self.builder.store(val, target)
+        for target in targets:
+            self.builder.store(val, self.func_symtab[-1][target.name])
 
 
     def IfStmt(self, node: IfStmt):
@@ -187,50 +195,48 @@ class LLVMBackend(Backend):
         # Visit left and right expressions
         left = self.visit(node.left)
         right = self.visit(node.right)
-        op = self.visit(node.op)
+        op = self.visit(node.operator)
 
         return self.builder.icmp_signed(op, left, right)
 
     def Identifier(self, node: Identifier) -> LoadInstr:
-        # if  node.varInstance.isGlobal:
-        #     self.instr(
-        #         f"getstatic Field {self.main} {node.name} {node.inferredType.getJavaSignature()}")
-        # elif node.varInstance.isNonlocal:
-        #     # self.load(node.name, ListValueType(node.inferredType))
-        #     self.loadInt(0)
-        #     self.arrayLoad(node.inferredType)
-        # else:
-        #     self.load(node.name, node.inferredType)
-        
-        pass
+
+        if self.builder is None:
+            raise Exception("No Builder is active")
+
+        return self.builder.load(self.func_symtab[-1][node.name])
 
     def IfExpr(self, node: IfExpr) -> PhiInstr:
         
         if self.builder is None:
             raise Exception("No builder is active")
-        
-        cond = self.builder.append_basic_block(self.module.get_unique_name("cond"))
-        if_expr = self.builder.append_basic_block(self.module.get_unique_name("if.expr"))
-        else_expr = self.builder.append_basic_block(self.module.get_unique_name("else.expr"))
-        end_expr = self.builder.append_basic_block(self.module.get_unique_name("end.expr"))
 
-        self.builder.branch(cond)
+        cond_bb = self.builder.function.append_basic_block(self.module.get_unique_name("if_cond"))
+        then_body_bb = self.builder.function.append_basic_block(self.module.get_unique_name("if_then"))
+        else_body_bb = self.builder.function.append_basic_block(self.module.get_unique_name("if_else"))        
+        end_bb = self.builder.function.append_basic_block(self.module.get_unique_name("if_end"))        
 
-        with self.builder.goto_block(cond):
+        self.builder.branch(cond_bb)
+
+        with self.builder.goto_block(cond_bb):
             cond = self.visit(node.condition)
-            self.builder.cbranch(cond, if_expr, else_expr)
-        
-        with self.builder.goto_block(if_expr):
-            for stmt in node.thenExpr:
-                self.visit(stmt)
-            self.builder.branch(end_expr)
-        
-        with self.builder.goto_block(else_expr):
-            for stmt in node.elseExpr:
-                self.visit(stmt)
-            self.builder.branch(end_expr)
+            self.builder.cbranch(cond, then_body_bb, else_body_bb)
 
-        self.builder.position_at_end(end_expr)
+        with self.builder.goto_block(then_body_bb):
+            exp1 = self.visit(node.thenExpr)
+            self.builder.branch(end_bb)
+
+        with self.builder.goto_block(else_body_bb):
+            exp2 = self.visit(node.elseExpr)
+            self.builder.branch(end_bb)
+        
+        self.builder.position_at_end(end_bb)
+
+        phi_istr = self.builder.phi(self._get_llvm_type("bool"), name=self.module.get_unique_name("phi")
+        ).add_incoming(exp1,then_body_bb
+        ).add_incoming(exp2,else_body_bb)
+
+        return phi_istr
 
 
     ##################################
