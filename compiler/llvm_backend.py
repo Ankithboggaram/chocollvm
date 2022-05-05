@@ -1,7 +1,11 @@
+from pydoc import classname
+from time import sleep
 from typing import Dict, List, Optional
 
 from llvmlite import binding, ir
 from llvmlite.ir.instructions import CallInstr, ICMPInstr, LoadInstr, PhiInstr
+
+from compiler.types.classvaluetype import ClassValueType
 
 from .astnodes import (
     AssignStmt,
@@ -106,25 +110,128 @@ class LLVMBackend(Backend):
     ##################################
 
     def VarDef(self, node: VarDef):
-        pass
+        
+        if self.builder is None:
+            raise Exception("No builder is active")
+        
+        # Create allocation for variable
+
 
     def AssignStmt(self, node: AssignStmt):
-        pass
+        if self.builder is None:
+            raise Exception("No builder is active")
+
+        val = self.visit(node.value)
+        # target = self._get_var_addr(node.targets)
+
+        for target in node.targets:
+            self.builder.store(val, target)
+
 
     def IfStmt(self, node: IfStmt):
-        pass
+
+        # Create basic blocks for the if and else blocks
+        if self.builder is None:
+            raise Exception("No builder is active")
+
+        cond = self.builder.append_basic_block(self.module.get_unique_name("if.cond"))
+        if_block = self.builder.append_basic_block(self.module.get_unique_name("if"))
+        else_block = self.builder.append_basic_block(self.module.get_unique_name("else"))
+        end_block = self.builder.append_basic_block(self.module.get_unique_name("end"))
+
+        self.builder.branch(cond)
+
+        with self.builder.goto_block(cond):
+            cond = self.visit(node.condition)
+            self.builder.cbranch(cond, if_block, else_block)
+
+        with self.builder.goto_block(if_block):
+            for stmt in node.thenbody:
+                self.visit(stmt)
+            self.builder.branch(end_block)
+        
+        with self.builder.goto_block(else_block):
+            for stmt in node.elseBody:
+                self.visit(stmt)
+            self.builder.branch(end_block)
+
+        self.builder.position_at_end(end_block)
+
 
     def WhileStmt(self, node: WhileStmt):
-        pass
+       
+        if self.builder is None:
+            raise Exception("No builder is active")
+        
+        bb_cond = self.builder.append_basic_block(self.module.get_unique_name("cond"))
+        bb_body = self.builder.append_basic_block(self.module.get_unique_name("body"))
+        bb_end = self.builder.append_basic_block(self.module.get_unique_name("end"))
+
+        self.builder.branch(bb_cond)
+
+        with self.builder.goto_block(bb_cond):
+            cond = self.visit(node.condition)
+            self.builder.cbranch(cond, bb_body, bb_end)
+        
+        with self.builder.goto_block(bb_body):
+            for stmt in node.body:
+                self.visit(stmt)
+            self.builder.branch(bb_cond)
+
+        self.builder.position_at_end(bb_end)
 
     def BinaryExpr(self, node: BinaryExpr) -> Optional[ICMPInstr]:
-        pass
+        if self.builder is None:
+            raise Exception("No builder is active")
+        
+        # Visit left and right expressions
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        op = self.visit(node.op)
+
+        return self.builder.icmp_signed(op, left, right)
 
     def Identifier(self, node: Identifier) -> LoadInstr:
+        # if  node.varInstance.isGlobal:
+        #     self.instr(
+        #         f"getstatic Field {self.main} {node.name} {node.inferredType.getJavaSignature()}")
+        # elif node.varInstance.isNonlocal:
+        #     # self.load(node.name, ListValueType(node.inferredType))
+        #     self.loadInt(0)
+        #     self.arrayLoad(node.inferredType)
+        # else:
+        #     self.load(node.name, node.inferredType)
+        
         pass
 
     def IfExpr(self, node: IfExpr) -> PhiInstr:
-        pass
+        
+        if self.builder is None:
+            raise Exception("No builder is active")
+        
+        cond = self.builder.append_basic_block(self.module.get_unique_name("cond"))
+        if_expr = self.builder.append_basic_block(self.module.get_unique_name("if.expr"))
+        else_expr = self.builder.append_basic_block(self.module.get_unique_name("else.expr"))
+        end_expr = self.builder.append_basic_block(self.module.get_unique_name("end.expr"))
+
+        self.builder.branch(cond)
+
+        with self.builder.goto_block(cond):
+            cond = self.visit(node.condition)
+            self.builder.cbranch(cond, if_expr, else_expr)
+        
+        with self.builder.goto_block(if_expr):
+            for stmt in node.thenExpr:
+                self.visit(stmt)
+            self.builder.branch(end_expr)
+        
+        with self.builder.goto_block(else_expr):
+            for stmt in node.elseExpr:
+                self.visit(stmt)
+            self.builder.branch(end_expr)
+
+        self.builder.position_at_end(end_expr)
+
 
     ##################################
     #      END OF IMPLEMENTATION     #
